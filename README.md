@@ -99,6 +99,29 @@ SYSTEM_PROMPT = "أنت مساعد متخصص في البرمجة..."
 **صنع بـ ❤️ باستخدام Python + Google Gemini + GitHub Actions**
 
 
+## 🧠 Choosing the AI provider & model
+
+Send **/model** in the chat and the bot shows inline buttons:
+
+1. First screen — providers that have an API key set (⚡ Groq, 🌐 OpenRouter, ✨ Gemini).
+2. Second screen — the free models of that provider.
+
+The choice is saved per chat in `settings.json` and used for every later question.
+If the chosen model fails (quota, outage), the bot silently falls back to the
+provider's other models, then to the remaining providers.
+
+> ⚠️ On GitHub Actions the runner filesystem is wiped after each run, so the
+> selection resets to the default (Groq / Llama 3.3 70B) unless you host the bot
+> somewhere persistent or commit `settings.json`.
+
+### Available free models
+
+| Provider | Models |
+| --- | --- |
+| ⚡ Groq | Llama 3.3 70B, Llama 3.1 8B, GPT-OSS 20B |
+| 🌐 OpenRouter | Llama 3.3 70B, DeepSeek V3, Qwen 3 Coder, Gemma 2 9B |
+| ✨ Gemini | 2.0 Flash, 2.5 Flash |
+
 ## ⚡ Response speed / always-on hosting
 
 `bot.py` supports two modes via the `RUN_DURATION` environment variable:

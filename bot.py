@@ -6,8 +6,17 @@ Runs automatically via GitHub Actions every 5 minutes.
 
 import os
 import sys
+import json
 import time
 import requests
+
+from providers import (
+    DEFAULT_MODEL,
+    DEFAULT_PROVIDER,
+    PROVIDERS,
+    model_id,
+    model_label,
+)
 
 # Optional: load keys from a local .env file (never committed) for local runs.
 if os.path.exists(".env"):
@@ -51,6 +60,9 @@ GROQ_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant")
 RUN_DURATION = int(os.environ.get("RUN_DURATION", "0"))
 POLL_TIMEOUT = 25  # seconds Telegram holds the connection open per poll
 
+# Per-chat provider/model choice, persisted between runs.
+SETTINGS_FILE = os.environ.get("SETTINGS_FILE", "settings.json")
+
 # Telegram message length limit
 MAX_MSG_LENGTH = 4000
 
@@ -93,21 +105,106 @@ def tg_request(method, **kwargs):
         return {"ok": False, "description": str(exc)}
 
 
+def load_settings() -> dict:
+    """Load per-chat provider/model preferences."""
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(settings: dict) -> None:
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as fh:
+            json.dump(settings, fh, ensure_ascii=False, indent=2)
+    except OSError as exc:
+        print(f"[settings] could not save: {exc}", file=sys.stderr)
+
+
+SETTINGS = {}
+
+
+def get_choice(chat_id) -> tuple:
+    """Return (provider, model_key) for a chat, falling back to defaults."""
+    entry = SETTINGS.get(str(chat_id), {})
+    provider = entry.get("provider", DEFAULT_PROVIDER)
+    if provider not in PROVIDERS or not os.environ.get(PROVIDERS[provider]["env"], "").strip():
+        provider = next(
+            (p for p in PROVIDERS if os.environ.get(PROVIDERS[p]["env"], "").strip()),
+            DEFAULT_PROVIDER,
+        )
+    model_key = entry.get("model", DEFAULT_MODEL)
+    if model_key not in PROVIDERS[provider]["models"]:
+        model_key = next(iter(PROVIDERS[provider]["models"]))
+    return provider, model_key
+
+
+def set_choice(chat_id, provider=None, model_key=None) -> None:
+    entry = SETTINGS.setdefault(str(chat_id), {})
+    if provider:
+        entry["provider"] = provider
+        entry.pop("model", None)
+    if model_key:
+        entry["model"] = model_key
+    save_settings(SETTINGS)
+
+
 def get_updates(offset=None, timeout=5):
     """Fetch new messages from Telegram (long-polling when timeout > 0)."""
-    params = {"timeout": timeout, "allowed_updates": ["message"]}
+    params = {"timeout": timeout, "allowed_updates": ["message", "callback_query"]}
     if offset is not None:
         params["offset"] = offset
     return tg_request("getUpdates", **params)
 
 
-def send_message(chat_id, text):
+def send_message(chat_id, text, keyboard=None):
     """Send a text message, splitting if it exceeds Telegram's limit."""
     if not text or not text.strip():
         text = "⚠️ لم أتمكن من إنشاء رد. حاول مرة أخرى."
     chunks = [text[i : i + MAX_MSG_LENGTH] for i in range(0, len(text), MAX_MSG_LENGTH)]
-    for chunk in chunks:
-        tg_request("sendMessage", chat_id=chat_id, text=chunk)
+    for index, chunk in enumerate(chunks):
+        payload = {"chat_id": chat_id, "text": chunk}
+        # Attach the keyboard only to the last chunk.
+        if keyboard and index == len(chunks) - 1:
+            payload["reply_markup"] = {"inline_keyboard": keyboard}
+        tg_request("sendMessage", **payload)
+
+
+def edit_message(chat_id, message_id, text, keyboard=None):
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    if keyboard:
+        payload["reply_markup"] = {"inline_keyboard": keyboard}
+    tg_request("editMessageText", **payload)
+
+
+def answer_callback(callback_id, text=""):
+    tg_request("answerCallbackQuery", callback_query_id=callback_id, text=text)
+
+
+# ──────────────────────────────────────────────
+#  Inline keyboards
+# ──────────────────────────────────────────────
+
+def provider_keyboard(current_provider):
+    """Buttons listing every provider that has an API key configured."""
+    rows = []
+    for pid, info in PROVIDERS.items():
+        if not os.environ.get(info["env"], "").strip():
+            continue
+        mark = "✅ " if pid == current_provider else ""
+        rows.append([{"text": f"{mark}{info['label']}", "callback_data": f"p:{pid}"}])
+    return rows
+
+
+def model_keyboard(provider, current_model):
+    """Buttons listing the free models of one provider."""
+    rows = []
+    for key, (label, _) in PROVIDERS[provider]["models"].items():
+        mark = "✅ " if key == current_model else ""
+        rows.append([{"text": f"{mark}{label}", "callback_data": f"m:{provider}:{key}"}])
+    rows.append([{"text": "⬅️ رجوع للمزودين", "callback_data": "back"}])
+    return rows
 
 
 def send_typing(chat_id):
@@ -147,19 +244,19 @@ def _chat_completions(url: str, api_key: str, models, question: str) -> str:
             continue
 
         if resp.status_code >= 400:
-            last_error = RuntimeError(f"{resp.status_code}: {resp.text[:200]}")
+            last_error = RuntimeError(f"{model}: HTTP {resp.status_code} {resp.text[:200]}")
             continue
 
         choices = resp.json().get("choices") or []
         text = (choices[0].get("message", {}).get("content") or "").strip() if choices else ""
         if text:
             return text
-        last_error = RuntimeError("empty response")
+        last_error = RuntimeError(f"{model}: empty response")
 
     raise RuntimeError(str(last_error))
 
 
-def ask_gemini(question: str) -> str:
+def ask_gemini(question: str, models=None) -> str:
     """Send a question to Google Gemini (REST API) and return the answer."""
     payload = {
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
@@ -167,7 +264,7 @@ def ask_gemini(question: str) -> str:
     }
     last_error = None
 
-    for model in GEMINI_MODELS:
+    for model in models or GEMINI_MODELS:
         try:
             resp = requests.post(
                 f"{GEMINI_API}/{model}:generateContent",
@@ -179,20 +276,18 @@ def ask_gemini(question: str) -> str:
             last_error = exc
             continue
 
-        # 404 = model unavailable, 429 = quota exhausted -> try the next model
-        if resp.status_code in (404, 429):
-            last_error = RuntimeError(f"{model}: HTTP {resp.status_code}")
+        if resp.status_code == 404:
+            last_error = RuntimeError(f"{model}: not available")
             continue
         if resp.status_code == 429:
             raise RuntimeError(
-                "Gemini free-tier quota exhausted (HTTP 429). Add GROQ_API_KEY or "
-                "OPENROUTER_API_KEY as a fallback, or enable billing."
+                "Gemini free-tier quota exhausted (HTTP 429). Use /model to switch "
+                "to Groq or OpenRouter."
             )
         if resp.status_code in (400, 401, 403):
             raise RuntimeError(
                 f"Gemini rejected the API key (HTTP {resp.status_code}). "
-                "Create a new one at https://aistudio.google.com/apikey and update "
-                "the GEMINI_API_KEY secret."
+                "Create a new one at https://aistudio.google.com/apikey."
             )
         if resp.status_code >= 400:
             last_error = RuntimeError(f"{model}: HTTP {resp.status_code} {resp.text[:200]}")
@@ -214,55 +309,46 @@ def ask_gemini(question: str) -> str:
     raise RuntimeError(str(last_error))
 
 
-def ask_openrouter(question: str) -> str:
-    return _chat_completions(
-        "https://openrouter.ai/api/v1/chat/completions",
-        OPENROUTER_API_KEY,
-        OPENROUTER_MODELS,
-        question,
-    )
+def ask_provider(provider: str, question: str, models=None) -> str:
+    """Ask one specific provider, optionally forcing a model list."""
+    info = PROVIDERS[provider]
+    api_key = os.environ.get(info["env"], "").strip()
+    if not api_key:
+        raise RuntimeError(f"{info['label']}: no API key configured")
+
+    if provider == "gemini":
+        return ask_gemini(question, models)
+
+    if models is None:
+        models = [m[1] for m in info["models"].values()]
+    return _chat_completions(info["url"], api_key, models, question)
 
 
-def ask_groq(question: str) -> str:
-    return _chat_completions(
-        "https://api.groq.com/openai/v1/chat/completions",
-        GROQ_API_KEY,
-        GROQ_MODELS,
-        question,
-    )
+def ask_ai(question: str, chat_id=None) -> str:
+    """Answer using the chat's chosen model, then fall back to other providers."""
+    if chat_id is not None:
+        provider, model_key = get_choice(chat_id)
+    else:
+        provider, model_key = DEFAULT_PROVIDER, DEFAULT_MODEL
 
-
-def ask_ai(question: str) -> str:
-    """Try every configured AI provider in order until one answers."""
-    # Groq first: fastest and its free tier actually works worldwide.
-    # Gemini last because its free tier is unavailable in many regions (quota
-    # "limit: 0" means the project has no free allowance at all).
-    available = {
-        "Groq": (GROQ_API_KEY, ask_groq),
-        "OpenRouter": (OPENROUTER_API_KEY, ask_openrouter),
-        "Gemini": (GEMINI_API_KEY, ask_gemini),
-    }
-    order = [p.strip() for p in os.environ.get("AI_ORDER", "Groq,OpenRouter,Gemini").split(",")]
-    providers = [
-        (name, available[name][1])
-        for name in order
-        if name in available and available[name][0]
-    ]
-
-    if not providers:
-        raise RuntimeError("No AI provider configured (set GEMINI_API_KEY, OPENROUTER_API_KEY or GROQ_API_KEY)")
+    attempts = [(provider, [model_id(provider, model_key)])]
+    # Fallbacks: the rest of the chosen provider's models, then other providers.
+    attempts.append((provider, None))
+    for pid in PROVIDERS:
+        if pid != provider and os.environ.get(PROVIDERS[pid]["env"], "").strip():
+            attempts.append((pid, None))
 
     errors = []
-    for name, fn in providers:
+    for pid, models in attempts:
         try:
-            answer = fn(question)
-            print(f"  🧠 answered by {name}")
+            answer = ask_provider(pid, question, models)
+            print(f"  🧠 answered by {PROVIDERS[pid]['label']}")
             return answer
         except Exception as exc:
-            errors.append(f"{name} -> {exc}")
-            print(f"  ⚠️ {name} failed: {exc}", file=sys.stderr)
+            errors.append(f"{pid} -> {exc}")
+            print(f"  ⚠️ {pid} failed: {exc}", file=sys.stderr)
 
-    raise RuntimeError(" | ".join(errors))
+    raise RuntimeError(" | ".join(errors[-3:]))
 
 
 # ──────────────────────────────────────────────
@@ -292,6 +378,7 @@ def handle_message(message: dict):
             "  • البرمجة وحل المشاكل التقنية\n"
             "  • كتابة النصوص والمقالات\n"
             "  • وأشياء كثيرة!\n\n"
+            "🧠 استخدم /model لاختيار المزوّد والموديل المجاني.\n\n"
             "⌨️ اكتب سؤالك الآن وجرّب..."
         )
         send_message(chat_id, welcome)
@@ -304,12 +391,28 @@ def handle_message(message: dict):
             "ببساطة اكتب أي سؤال وسأجيبك بالذكاء الاصطناعي!\n\n"
             "🔹 الأوامر المتاحة:\n"
             "  /start — بدء المحادثة\n"
-            "  /help  — عرض هذه المساعدة\n\n"
+            "  /help  — عرض هذه المساعدة\n"
+            "  /model — اختيار المزوّد والموديل 🧠\n\n"
             "⏱️ ملاحظة: قد يكون هناك تأخير بسيط في الرد (حتى 5 دقائق)\n"
             "لأن البوت يعمل عبر GitHub Actions.\n\n"
             "🌐 مدعوم بـ Google Gemini AI"
         )
         send_message(chat_id, help_text)
+        return
+
+    # ── /model command: choose provider & model ──
+    if text.strip() in ("/model", "/models", "/ai"):
+        provider, model_key = get_choice(chat_id)
+        rows = provider_keyboard(provider)
+        if not rows:
+            send_message(chat_id, "⚠️ لا يوجد أي مزود مفعّل. أضف GROQ_API_KEY أو OPENROUTER_API_KEY.")
+            return
+        send_message(
+            chat_id,
+            "🧠 *اختر مزوّد الذكاء الاصطناعي:*\n\n"
+            f"الحالي: {PROVIDERS[provider]['label']} — {model_label(provider, model_key)}",
+            keyboard=rows,
+        )
         return
 
     # ── Unknown command ──
@@ -320,7 +423,7 @@ def handle_message(message: dict):
     # ── AI Response ──
     send_typing(chat_id)
     try:
-        answer = ask_ai(text)
+        answer = ask_ai(text, chat_id)
         send_message(chat_id, answer)
         print(f"  ✅ Replied to {first_name} (chat {chat_id})")
     except Exception as exc:
@@ -330,6 +433,66 @@ def handle_message(message: dict):
         )
         send_message(chat_id, error_msg)
         print(f"  ❌ Error for {first_name}: {exc}", file=sys.stderr)
+
+
+def handle_callback(callback: dict):
+    """Handle inline-keyboard button presses."""
+    data = callback.get("data", "")
+    message = callback.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    message_id = message.get("message_id")
+    callback_id = callback.get("id")
+
+    if chat_id is None:
+        return
+
+    if data == "back":
+        provider, model_key = get_choice(chat_id)
+        edit_message(
+            chat_id,
+            message_id,
+            "🧠 اختر مزوّد الذكاء الاصطناعي:",
+            keyboard=provider_keyboard(provider),
+        )
+        answer_callback(callback_id)
+        return
+
+    if data.startswith("p:"):
+        provider = data[2:]
+        if provider not in PROVIDERS:
+            answer_callback(callback_id, "مزود غير معروف")
+            return
+        set_choice(chat_id, provider=provider)
+        _, model_key = get_choice(chat_id)
+        edit_message(
+            chat_id,
+            message_id,
+            f"{PROVIDERS[provider]['label']}\n\n📦 اختر الموديل المجاني:",
+            keyboard=model_keyboard(provider, model_key),
+        )
+        answer_callback(callback_id, f"تم اختيار {PROVIDERS[provider]['label']}")
+        return
+
+    if data.startswith("m:"):
+        _, provider, model_key = data.split(":", 2)
+        if provider not in PROVIDERS or model_key not in PROVIDERS[provider]["models"]:
+            answer_callback(callback_id, "موديل غير معروف")
+            return
+        set_choice(chat_id, provider=provider, model_key=model_key)
+        label = model_label(provider, model_key)
+        edit_message(
+            chat_id,
+            message_id,
+            f"✅ تم التفعيل!\n\n"
+            f"المزوّد: {PROVIDERS[provider]['label']}\n"
+            f"الموديل: {label}\n\n"
+            "اكتب سؤالك الآن 💬",
+            keyboard=model_keyboard(provider, model_key),
+        )
+        answer_callback(callback_id, f"✅ {label}")
+        return
+
+    answer_callback(callback_id)
 
 
 # ──────────────────────────────────────────────
@@ -384,6 +547,9 @@ def main():
 
     check_token()
 
+    global SETTINGS
+    SETTINGS = load_settings()
+
     offset = None
     deadline = time.time() + RUN_DURATION
     total = 0
@@ -415,6 +581,8 @@ def main():
                 if "message" in update:
                     handle_message(update["message"])
                     total += 1
+                elif "callback_query" in update:
+                    handle_callback(update["callback_query"])
 
         if RUN_DURATION == 0:
             if not updates:
