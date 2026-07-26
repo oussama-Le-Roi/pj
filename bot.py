@@ -23,6 +23,18 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_MODELS = ("gemini-2.0-flash", "gemini-2.5-flash", "gemini-flash-latest")
 
+# Optional free fallback providers (used only if their key is present).
+# OpenRouter  -> https://openrouter.ai/keys        (free :free models)
+# Groq        -> https://console.groq.com/keys     (generous free tier)
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+
+OPENROUTER_MODELS = (
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemma-2-9b-it:free",
+)
+GROQ_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant")
+
 # Telegram message length limit
 MAX_MSG_LENGTH = 4000
 
@@ -90,6 +102,43 @@ def send_typing(chat_id):
 #  Gemini AI
 # ──────────────────────────────────────────────
 
+def _chat_completions(url: str, api_key: str, models, question: str) -> str:
+    """Call any OpenAI-compatible /chat/completions endpoint."""
+    last_error = None
+    for model in models:
+        try:
+            resp = requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": question},
+                    ],
+                },
+                timeout=60,
+            )
+        except requests.RequestException as exc:
+            last_error = exc
+            continue
+
+        if resp.status_code >= 400:
+            last_error = RuntimeError(f"{resp.status_code}: {resp.text[:200]}")
+            continue
+
+        choices = resp.json().get("choices") or []
+        text = (choices[0].get("message", {}).get("content") or "").strip() if choices else ""
+        if text:
+            return text
+        last_error = RuntimeError("empty response")
+
+    raise RuntimeError(str(last_error))
+
+
 def ask_gemini(question: str) -> str:
     """Send a question to Google Gemini (REST API) and return the answer."""
     payload = {
@@ -110,25 +159,72 @@ def ask_gemini(question: str) -> str:
             last_error = exc
             continue
 
-        if resp.status_code == 404:  # model not available for this key
-            last_error = RuntimeError(f"model {model} not found")
+        # 404 = model unavailable, 429 = quota exhausted -> try the next model
+        if resp.status_code in (404, 429):
+            last_error = RuntimeError(f"{model}: HTTP {resp.status_code}")
             continue
         if resp.status_code >= 400:
-            raise RuntimeError(f"Gemini error {resp.status_code}: {resp.text[:300]}")
+            last_error = RuntimeError(f"{model}: HTTP {resp.status_code} {resp.text[:200]}")
+            continue
 
         data = resp.json()
         candidates = data.get("candidates") or []
         if not candidates:
             reason = (data.get("promptFeedback") or {}).get("blockReason", "empty response")
-            raise RuntimeError(f"Gemini returned no answer ({reason})")
+            last_error = RuntimeError(f"{model}: {reason}")
+            continue
 
         parts = (candidates[0].get("content") or {}).get("parts") or []
         text = "".join(p.get("text", "") for p in parts).strip()
         if text:
             return text
-        last_error = RuntimeError("empty text in Gemini response")
+        last_error = RuntimeError(f"{model}: empty text")
 
-    raise RuntimeError(f"All Gemini models failed: {last_error}")
+    raise RuntimeError(str(last_error))
+
+
+def ask_openrouter(question: str) -> str:
+    return _chat_completions(
+        "https://openrouter.ai/api/v1/chat/completions",
+        OPENROUTER_API_KEY,
+        OPENROUTER_MODELS,
+        question,
+    )
+
+
+def ask_groq(question: str) -> str:
+    return _chat_completions(
+        "https://api.groq.com/openai/v1/chat/completions",
+        GROQ_API_KEY,
+        GROQ_MODELS,
+        question,
+    )
+
+
+def ask_ai(question: str) -> str:
+    """Try every configured AI provider in order until one answers."""
+    providers = []
+    if GEMINI_API_KEY:
+        providers.append(("Gemini", ask_gemini))
+    if OPENROUTER_API_KEY:
+        providers.append(("OpenRouter", ask_openrouter))
+    if GROQ_API_KEY:
+        providers.append(("Groq", ask_groq))
+
+    if not providers:
+        raise RuntimeError("No AI provider configured (set GEMINI_API_KEY, OPENROUTER_API_KEY or GROQ_API_KEY)")
+
+    errors = []
+    for name, fn in providers:
+        try:
+            answer = fn(question)
+            print(f"  🧠 answered by {name}")
+            return answer
+        except Exception as exc:
+            errors.append(f"{name} -> {exc}")
+            print(f"  ⚠️ {name} failed: {exc}", file=sys.stderr)
+
+    raise RuntimeError(" | ".join(errors))
 
 
 # ──────────────────────────────────────────────
@@ -186,11 +282,14 @@ def handle_message(message: dict):
     # ── AI Response ──
     send_typing(chat_id)
     try:
-        answer = ask_gemini(text)
+        answer = ask_ai(text)
         send_message(chat_id, answer)
         print(f"  ✅ Replied to {first_name} (chat {chat_id})")
     except Exception as exc:
-        error_msg = "⚠️ عذراً، حدث خطأ أثناء معالجة سؤالك.\nحاول مرة أخرى لاحقاً."
+        error_msg = (
+            "⚠️ عذراً، حدث خطأ أثناء معالجة سؤالك.\n"
+            f"التفاصيل: {str(exc)[:300]}"
+        )
         send_message(chat_id, error_msg)
         print(f"  ❌ Error for {first_name}: {exc}", file=sys.stderr)
 
@@ -223,8 +322,12 @@ def main():
     if not TELEGRAM_TOKEN:
         print("❌ TELEGRAM_BOT_TOKEN is not set!", file=sys.stderr)
         sys.exit(1)
-    if not GEMINI_API_KEY:
-        print("❌ GEMINI_API_KEY is not set!", file=sys.stderr)
+    if not (GEMINI_API_KEY or OPENROUTER_API_KEY or GROQ_API_KEY):
+        print(
+            "❌ No AI key set! Add at least one of: GEMINI_API_KEY, "
+            "OPENROUTER_API_KEY, GROQ_API_KEY",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     print("🤖 Bot started — checking for new messages...", flush=True)
