@@ -176,6 +176,12 @@ def ask_gemini(question: str) -> str:
         if resp.status_code in (404, 429):
             last_error = RuntimeError(f"{model}: HTTP {resp.status_code}")
             continue
+        if resp.status_code in (400, 401, 403):
+            raise RuntimeError(
+                f"Gemini rejected the API key (HTTP {resp.status_code}). "
+                "Create a new one at https://aistudio.google.com/apikey and update "
+                "the GEMINI_API_KEY secret."
+            )
         if resp.status_code >= 400:
             last_error = RuntimeError(f"{model}: HTTP {resp.status_code} {resp.text[:200]}")
             continue
@@ -335,7 +341,18 @@ def main():
     if not TELEGRAM_TOKEN:
         print("❌ TELEGRAM_BOT_TOKEN is not set!", file=sys.stderr)
         sys.exit(1)
-    if not (GEMINI_API_KEY or OPENROUTER_API_KEY or GROQ_API_KEY):
+    configured = [
+        name
+        for name, key in (
+            ("Gemini", GEMINI_API_KEY),
+            ("OpenRouter", OPENROUTER_API_KEY),
+            ("Groq", GROQ_API_KEY),
+        )
+        if key
+    ]
+    print(f"🧩 AI providers configured: {', '.join(configured) or 'none'}")
+
+    if not configured:
         print(
             "❌ No AI key set! Add at least one of: GEMINI_API_KEY, "
             "OPENROUTER_API_KEY, GROQ_API_KEY",
