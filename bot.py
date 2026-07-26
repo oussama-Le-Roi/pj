@@ -20,7 +20,7 @@ if not TELEGRAM_TOKEN:
     sys.exit(1)
 
 
-GEMINI_API_KEY = os.getenv('TELEGRAM_BOT_TOKEN')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if not GEMINI_API_KEY:
     print("❌ Error: GEMINI_API_KEY is not set!")
     sys.exit(1)
