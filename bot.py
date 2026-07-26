@@ -12,8 +12,18 @@ import google.generativeai as genai
 # ──────────────────────────────────────────────
 #  Configuration (loaded from GitHub Secrets)
 # ──────────────────────────────────────────────
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+if not TELEGRAM_TOKEN:
+    print("❌ Error: TELEGRAM_TOKEN is not set!")
+    sys.exit(1)
+
+
+GEMINI_API_KEY = os.getenv('TELEGRAM_BOT_TOKEN')
+if not GEMINI_API_KEY:
+    print("❌ Error: GEMINI_API_KEY is not set!")
+    sys.exit(1)
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # Telegram message length limit
