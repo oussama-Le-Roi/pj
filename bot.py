@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-🤖 Telegram AI Bot — Powered by Google Gemini (Free Tier)
-Runs automatically via GitHub Actions every 5 minutes.
+🤖 Telegram AI Bot — free multi-provider AI (Groq / OpenRouter / Gemini)
+
+Pick the provider and model from inline buttons with /model.
+Runs on GitHub Actions, or as a persistent process when RUN_DURATION > 0.
 """
 
 import os
