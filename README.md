@@ -97,3 +97,31 @@ SYSTEM_PROMPT = "أنت مساعد متخصص في البرمجة..."
 ---
 
 **صنع بـ ❤️ باستخدام Python + Google Gemini + GitHub Actions**
+
+
+## ⚡ Response speed / always-on hosting
+
+`bot.py` supports two modes via the `RUN_DURATION` environment variable:
+
+| `RUN_DURATION` | Behaviour |
+| --- | --- |
+| `0` or unset | Drain pending messages once, then exit (default). |
+| e.g. `290` | Stay alive and long-poll Telegram for ~290s, replying instantly. |
+
+### GitHub Actions (free, near real-time)
+
+See `WORKFLOW_UPDATE.md`. With `RUN_DURATION: '290'` and a `*/5` cron, a run is
+almost always listening. Caveat: GitHub's scheduler is best-effort and frequently
+delayed, so short gaps happen.
+
+### True 24/7 (recommended for a real bot)
+
+Run it as a normal always-on process with `RUN_DURATION=86400` (or wrap in a
+restart loop) on any of these free/cheap hosts:
+
+- **Railway / Render / Fly.io** — deploy the repo, set the secrets as env vars,
+  start command `python bot.py`.
+- **Any VPS**: `RUN_DURATION=86400 python bot.py` under `systemd` or `tmux`.
+
+GitHub Actions is not designed for persistent processes; a tiny always-on host is
+the only way to get genuinely instant replies with no gaps.

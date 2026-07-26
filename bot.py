@@ -6,6 +6,7 @@ Runs automatically via GitHub Actions every 5 minutes.
 
 import os
 import sys
+import time
 import requests
 
 # Optional: load keys from a local .env file (never committed) for local runs.
@@ -45,6 +46,11 @@ OPENROUTER_MODELS = (
 )
 GROQ_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant")
 
+# Long-polling: how long a single run keeps listening (seconds).
+# 0 = process the current backlog once and exit (old behaviour).
+RUN_DURATION = int(os.environ.get("RUN_DURATION", "0"))
+POLL_TIMEOUT = 25  # seconds Telegram holds the connection open per poll
+
 # Telegram message length limit
 MAX_MSG_LENGTH = 4000
 
@@ -68,7 +74,8 @@ def tg_request(method, **kwargs):
         resp = requests.post(
             f"{TELEGRAM_API}/{method}",
             json=kwargs,
-            timeout=30,
+            # Must outlive Telegram's long-poll window.
+            timeout=kwargs.get("timeout", 30) + 20,
         )
         resp.raise_for_status()
         return resp.json()
@@ -86,9 +93,9 @@ def tg_request(method, **kwargs):
         return {"ok": False, "description": str(exc)}
 
 
-def get_updates(offset=None):
-    """Fetch new messages from Telegram."""
-    params = {"timeout": 5, "allowed_updates": ["message"]}
+def get_updates(offset=None, timeout=5):
+    """Fetch new messages from Telegram (long-polling when timeout > 0)."""
+    params = {"timeout": timeout, "allowed_updates": ["message"]}
     if offset is not None:
         params["offset"] = offset
     return tg_request("getUpdates", **params)
@@ -360,33 +367,55 @@ def main():
         )
         sys.exit(1)
 
-    print("🤖 Bot started — checking for new messages...", flush=True)
+    mode = f"live for {RUN_DURATION}s" if RUN_DURATION > 0 else "single pass"
+    print(f"🤖 Bot started — {mode}...", flush=True)
 
     check_token()
 
-    # 1) Fetch updates
-    result = get_updates()
-    if not result.get("ok"):
-        print(f"❌ Failed to fetch updates: {result.get('description')}", file=sys.stderr)
-        sys.exit(1)
+    offset = None
+    deadline = time.time() + RUN_DURATION
+    total = 0
 
-    updates = result.get("result", [])
-    if not updates:
-        print("📭 No new messages.")
-        return
+    while True:
+        # Long-poll while in live mode, quick check otherwise.
+        remaining = deadline - time.time()
+        if RUN_DURATION > 0:
+            wait = max(1, min(POLL_TIMEOUT, int(remaining)))
+        else:
+            wait = 0
 
-    print(f"📩 Processing {len(updates)} update(s)...")
+        result = get_updates(offset=offset, timeout=wait)
+        if not result.get("ok"):
+            print(f"❌ Failed to fetch updates: {result.get('description')}", file=sys.stderr)
+            if result.get("error_code") in (401, 404):
+                sys.exit(1)
+            time.sleep(3)
+            if RUN_DURATION == 0 or time.time() >= deadline:
+                sys.exit(1)
+            continue
 
-    # 2) Acknowledge updates first so a crash cannot cause an endless retry loop
-    last_id = updates[-1]["update_id"]
-    get_updates(offset=last_id + 1)
+        updates = result.get("result", [])
+        if updates:
+            print(f"📩 Processing {len(updates)} update(s)...", flush=True)
+            # Acknowledge first so a crash cannot replay the same update forever.
+            offset = updates[-1]["update_id"] + 1
+            for update in updates:
+                if "message" in update:
+                    handle_message(update["message"])
+                    total += 1
 
-    # 3) Handle each message
-    for update in updates:
-        if "message" in update:
-            handle_message(update["message"])
+        if RUN_DURATION == 0:
+            if not updates:
+                print("📭 No new messages.")
+            break
+        if time.time() >= deadline:
+            break
 
-    print("✅ Done — all messages processed!")
+    # Flush the offset so the next run does not reprocess these updates.
+    if offset is not None:
+        get_updates(offset=offset, timeout=0)
+
+    print(f"✅ Done — {total} message(s) processed!")
 
 
 if __name__ == "__main__":
