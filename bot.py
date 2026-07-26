@@ -183,6 +183,11 @@ def ask_gemini(question: str) -> str:
         if resp.status_code in (404, 429):
             last_error = RuntimeError(f"{model}: HTTP {resp.status_code}")
             continue
+        if resp.status_code == 429:
+            raise RuntimeError(
+                "Gemini free-tier quota exhausted (HTTP 429). Add GROQ_API_KEY or "
+                "OPENROUTER_API_KEY as a fallback, or enable billing."
+            )
         if resp.status_code in (400, 401, 403):
             raise RuntimeError(
                 f"Gemini rejected the API key (HTTP {resp.status_code}). "
@@ -229,13 +234,20 @@ def ask_groq(question: str) -> str:
 
 def ask_ai(question: str) -> str:
     """Try every configured AI provider in order until one answers."""
-    providers = []
-    if GEMINI_API_KEY:
-        providers.append(("Gemini", ask_gemini))
-    if OPENROUTER_API_KEY:
-        providers.append(("OpenRouter", ask_openrouter))
-    if GROQ_API_KEY:
-        providers.append(("Groq", ask_groq))
+    # Groq first: fastest and its free tier actually works worldwide.
+    # Gemini last because its free tier is unavailable in many regions (quota
+    # "limit: 0" means the project has no free allowance at all).
+    available = {
+        "Groq": (GROQ_API_KEY, ask_groq),
+        "OpenRouter": (OPENROUTER_API_KEY, ask_openrouter),
+        "Gemini": (GEMINI_API_KEY, ask_gemini),
+    }
+    order = [p.strip() for p in os.environ.get("AI_ORDER", "Groq,OpenRouter,Gemini").split(",")]
+    providers = [
+        (name, available[name][1])
+        for name in order
+        if name in available and available[name][0]
+    ]
 
     if not providers:
         raise RuntimeError("No AI provider configured (set GEMINI_API_KEY, OPENROUTER_API_KEY or GROQ_API_KEY)")
