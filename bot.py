@@ -36,10 +36,14 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip().strip('"\'')
 # Users sometimes paste the token with the "bot" prefix already attached.
 if TELEGRAM_TOKEN.startswith("bot"):
     TELEGRAM_TOKEN = TELEGRAM_TOKEN[3:]
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+# Base URLs are overridable so the test-suite can point them at a local mock.
+TELEGRAM_BASE = os.environ.get("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/")
+TELEGRAM_API = f"{TELEGRAM_BASE}/bot{TELEGRAM_TOKEN}"
 
 # Gemini REST endpoint (the old google-generativeai SDK is end-of-life).
-GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models"
+GEMINI_API = os.environ.get(
+    "GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta"
+).rstrip("/") + "/models"
 GEMINI_MODELS = ("gemini-2.0-flash", "gemini-2.5-flash", "gemini-flash-latest")
 
 # Optional free fallback providers (used only if their key is present).
@@ -321,7 +325,8 @@ def ask_provider(provider: str, question: str, models=None) -> str:
 
     if models is None:
         models = [m[1] for m in info["models"].values()]
-    return _chat_completions(info["url"], api_key, models, question)
+    url = os.environ.get(f"{provider.upper()}_API_URL", info["url"])
+    return _chat_completions(url, api_key, models, question)
 
 
 def ask_ai(question: str, chat_id=None) -> str:
@@ -331,9 +336,15 @@ def ask_ai(question: str, chat_id=None) -> str:
     else:
         provider, model_key = DEFAULT_PROVIDER, DEFAULT_MODEL
 
-    attempts = [(provider, [model_id(provider, model_key)])]
-    # Fallbacks: the rest of the chosen provider's models, then other providers.
-    attempts.append((provider, None))
+    chosen = model_id(provider, model_key)
+    attempts = [(provider, [chosen])]
+
+    # Fallback 1: the chosen provider's *other* models.
+    others = [m for m in (mid for _, mid in PROVIDERS[provider]["models"].values()) if m != chosen]
+    if others:
+        attempts.append((provider, others))
+
+    # Fallback 2: the remaining providers that have a key.
     for pid in PROVIDERS:
         if pid != provider and os.environ.get(PROVIDERS[pid]["env"], "").strip():
             attempts.append((pid, None))

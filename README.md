@@ -122,6 +122,17 @@ provider's other models, then to the remaining providers.
 | 🌐 OpenRouter | Llama 3.3 70B, DeepSeek V3, Qwen 3 Coder, Gemma 2 9B |
 | ✨ Gemini | 2.0 Flash, 2.5 Flash |
 
+## 🧪 Tests
+
+```bash
+pip install -r requirements.txt
+python tests/test_bot.py
+```
+
+22 end-to-end tests run the whole bot against a local mock of the Telegram and
+AI APIs — no network, no real keys, no messages sent. They cover commands, the
+`/model` keyboards, per-chat persistence, provider fallback and the polling loop.
+
 ## ⚡ Response speed / always-on hosting
 
 `bot.py` supports two modes via the `RUN_DURATION` environment variable:
