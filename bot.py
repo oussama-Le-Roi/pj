@@ -8,6 +8,15 @@ import os
 import sys
 import requests
 
+# Optional: load keys from a local .env file (never committed) for local runs.
+if os.path.exists(".env"):
+    with open(".env", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                os.environ.setdefault(key.strip(), value.strip().strip('"\''))
+
 # ──────────────────────────────────────────────
 #  Configuration (loaded from GitHub Secrets)
 # ──────────────────────────────────────────────
@@ -31,6 +40,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 
 OPENROUTER_MODELS = (
     "meta-llama/llama-3.3-70b-instruct:free",
+    "deepseek/deepseek-chat-v3.1:free",
     "google/gemma-2-9b-it:free",
 )
 GROQ_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant")
@@ -112,6 +122,9 @@ def _chat_completions(url: str, api_key: str, models, question: str) -> str:
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
+                    # Recommended by OpenRouter, ignored by other providers.
+                    "HTTP-Referer": "https://github.com/oussama-Le-Roi/pj",
+                    "X-Title": "Telegram AI Bot",
                 },
                 json={
                     "model": model,
