@@ -11,8 +11,12 @@ import requests
 # ──────────────────────────────────────────────
 #  Configuration (loaded from GitHub Secrets)
 # ──────────────────────────────────────────────
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip().strip('"\'')
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip().strip('"\'')
+
+# Users sometimes paste the token with the "bot" prefix already attached.
+if TELEGRAM_TOKEN.startswith("bot"):
+    TELEGRAM_TOKEN = TELEGRAM_TOKEN[3:]
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # Gemini REST endpoint (the old google-generativeai SDK is end-of-life).
@@ -46,9 +50,18 @@ def tg_request(method, **kwargs):
         )
         resp.raise_for_status()
         return resp.json()
+    except requests.HTTPError as exc:
+        body = {}
+        try:
+            body = exc.response.json()
+        except Exception:
+            pass
+        desc = body.get("description", str(exc))
+        print(f"[Telegram API Error] {method}: {desc}", file=sys.stderr)
+        return {"ok": False, "error_code": body.get("error_code"), "description": desc}
     except requests.RequestException as exc:
         print(f"[Telegram API Error] {method}: {exc}", file=sys.stderr)
-        return {"ok": False}
+        return {"ok": False, "description": str(exc)}
 
 
 def get_updates(offset=None):
@@ -186,6 +199,23 @@ def handle_message(message: dict):
 #  Main Entry Point
 # ──────────────────────────────────────────────
 
+def check_token():
+    """Verify the Telegram token before doing anything else."""
+    result = tg_request("getMe")
+    if not result.get("ok"):
+        print(
+            "❌ Invalid TELEGRAM_BOT_TOKEN — Telegram rejected it "
+            f"({result.get('description')}).\n"
+            "   • Token format must be like 123456789:AAE... (no 'bot' prefix, no quotes/spaces)\n"
+            "   • Get a fresh one from @BotFather → /mybots → API Token\n"
+            "   • Update it in GitHub → Settings → Secrets and variables → Actions → TELEGRAM_BOT_TOKEN",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    bot = result.get("result", {})
+    print(f"🔑 Authenticated as @{bot.get('username')} (id {bot.get('id')})")
+
+
 def main():
     """Fetch new Telegram updates, reply with AI, then exit."""
 
@@ -197,12 +227,14 @@ def main():
         print("❌ GEMINI_API_KEY is not set!", file=sys.stderr)
         sys.exit(1)
 
-    print("🤖 Bot started — checking for new messages...")
+    print("🤖 Bot started — checking for new messages...", flush=True)
+
+    check_token()
 
     # 1) Fetch updates
     result = get_updates()
     if not result.get("ok"):
-        print(f"❌ Failed to fetch updates: {result}", file=sys.stderr)
+        print(f"❌ Failed to fetch updates: {result.get('description')}", file=sys.stderr)
         sys.exit(1)
 
     updates = result.get("result", [])
