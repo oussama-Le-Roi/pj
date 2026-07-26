@@ -7,7 +7,6 @@ Runs automatically via GitHub Actions every 5 minutes.
 import os
 import sys
 import requests
-import google.generativeai as genai
 
 # ──────────────────────────────────────────────
 #  Configuration (loaded from GitHub Secrets)
@@ -15,6 +14,10 @@ import google.generativeai as genai
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+
+# Gemini REST endpoint (the old google-generativeai SDK is end-of-life).
+GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models"
+GEMINI_MODELS = ("gemini-2.0-flash", "gemini-2.5-flash", "gemini-flash-latest")
 
 # Telegram message length limit
 MAX_MSG_LENGTH = 4000
@@ -75,14 +78,44 @@ def send_typing(chat_id):
 # ──────────────────────────────────────────────
 
 def ask_gemini(question: str) -> str:
-    """Send a question to Google Gemini and return the answer."""
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
-        system_instruction=SYSTEM_PROMPT,
-    )
-    response = model.generate_content(question)
-    return response.text
+    """Send a question to Google Gemini (REST API) and return the answer."""
+    payload = {
+        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"role": "user", "parts": [{"text": question}]}],
+    }
+    last_error = None
+
+    for model in GEMINI_MODELS:
+        try:
+            resp = requests.post(
+                f"{GEMINI_API}/{model}:generateContent",
+                headers={"x-goog-api-key": GEMINI_API_KEY},
+                json=payload,
+                timeout=60,
+            )
+        except requests.RequestException as exc:
+            last_error = exc
+            continue
+
+        if resp.status_code == 404:  # model not available for this key
+            last_error = RuntimeError(f"model {model} not found")
+            continue
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Gemini error {resp.status_code}: {resp.text[:300]}")
+
+        data = resp.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            reason = (data.get("promptFeedback") or {}).get("blockReason", "empty response")
+            raise RuntimeError(f"Gemini returned no answer ({reason})")
+
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        text = "".join(p.get("text", "") for p in parts).strip()
+        if text:
+            return text
+        last_error = RuntimeError("empty text in Gemini response")
+
+    raise RuntimeError(f"All Gemini models failed: {last_error}")
 
 
 # ──────────────────────────────────────────────
@@ -179,14 +212,14 @@ def main():
 
     print(f"📩 Processing {len(updates)} update(s)...")
 
-    # 2) Handle each message
+    # 2) Acknowledge updates first so a crash cannot cause an endless retry loop
+    last_id = updates[-1]["update_id"]
+    get_updates(offset=last_id + 1)
+
+    # 3) Handle each message
     for update in updates:
         if "message" in update:
             handle_message(update["message"])
-
-    # 3) Acknowledge processed updates so they are not returned again
-    last_id = updates[-1]["update_id"]
-    get_updates(offset=last_id + 1)
 
     print("✅ Done — all messages processed!")
 
