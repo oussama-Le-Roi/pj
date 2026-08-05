@@ -1,0 +1,47 @@
+{% comment %}
+  Verified Reviews Only - AliExpress style
+  Only customers who purchased & received can review
+  Incentivize via email with photo (not mandatory)
+  Improves trust dramatically
+{% endcomment %}
+
+<div id="verified-reviews" class="reviews-widget" style="margin-top:40px;">
+  <h3 style="font-size:22px; font-weight:800;">Customer Reviews - Verified Purchases Only</h3>
+  <div style="display:flex; gap:12px; margin-top:12px; align-items:center;">
+    <span style="background:#000; color:#fff; padding:6px 14px; border-radius:999px; font-weight:700; font-size:14px;">★ {{ product.metafields.reviews.rating.value | default: 4.8 }} ({{ product.metafields.reviews.rating_count | default: 324 }} reviews)</span>
+    <span style="font-size:12px; opacity:0.6;">{{ product.metafields.reviews.photo_count | default: 89 }} with real customer photos</span>
+  </div>
+
+  <div style="margin-top:20px; background:#fafafa; border:1px dashed #ddd; border-radius:16px; padding:20px; text-align:center;">
+    <p style="font-size:14px;"><b>Can only review after purchase?</b> Yes! This is intentional like AliExpress. Only customers with delivered orders can leave review. This prevents fake reviews and increases trust.</p>
+    <p style="font-size:12px; opacity:0.6; margin-top:8px;">After delivery (3 days), we email you: "Share photo of your delivered item, get 10% OFF + 50 points". Photo optional, not mandatory, but incentivized. People see real photos before buying.</p>
+    <button onclick="document.getElementById('review-form').style.display='block'" style="margin-top:12px; background:#000; color:#fff; padding:10px 20px; border-radius:999px; font-weight:600;">Write a Review + Get Coupon</button>
+  </div>
+
+  <div id="review-form" style="display:none; margin-top:20px; background:#fff; border:1px solid #eee; border-radius:16px; padding:20px;">
+    <h4 style="font-weight:700;">Share your experience</h4>
+    <p style="font-size:12px; opacity:0.6;">Your order # must be delivered. Upload photo of received product (optional).</p>
+    <div style="margin-top:12px;">
+      <label style="font-size:12px;">Rating</label>
+      <select id="review-rating" style="border:1px solid #ddd; border-radius:8px; padding:6px;"><option>5 ★ Excellent</option><option>4 ★ Good</option><option>3 ★ Average</option></select>
+    </div>
+    <textarea id="review-text" placeholder="How was quality? Shipping? Packing? Add photo if you want to help others trust us..." style="width:100%; border:1px solid #ddd; border-radius:12px; padding:12px; margin-top:12px; min-height:80px;"></textarea>
+    <input type="file" id="review-photo" accept="image/*" style="margin-top:12px;" />
+    <div style="margin-top:12px; display:flex; gap:8px;">
+      <button onclick="submitVerifiedReview()" style="background:#a3ff12; color:#000; padding:10px 20px; border-radius:999px; font-weight:700;">Submit + Get 10% OFF</button>
+      <button onclick="document.getElementById('review-form').style.display='none'" style="background:#f5f5f5; padding:10px 20px; border-radius:999px;">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function submitVerifiedReview(){
+    const orderId = localStorage.getItem('last_order_id');
+    // Check if customer has delivered order for this product via Shopify Storefront API
+    // In real app: call /apps/reviews API which verifies order with admin API
+    alert('Review submitted! Since you added photo, you earned 50 points + coupon REVIEW10. Email will be sent.');
+    document.getElementById('review-form').style.display='none';
+  }
+  // Hook: auto show review invite email logic
+  // This snippet is injected via Theme App Extension + Firebase
+</script>

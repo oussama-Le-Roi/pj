@@ -1,0 +1,22 @@
+{% comment %}
+  GadgetsN.Store - Text Logo Fix
+  Replaces Nexus Gadgets image logo with domain name text
+  Usage: Replace header logo code with: {% render 'logo-text' %}
+  Removes any reference to mr.gf999 / Nexus
+{% endcomment %}
+
+<a href="/" class="header__logo flex items-center gap-2 no-underline" style="text-decoration:none">
+  {% if settings.logo_text_only %}
+    <span style="font-weight:900; font-size:22px; letter-spacing:-0.02em; color:#000;">
+      GadgetsN<span style="color:#84cc0f;">.</span>Store
+    </span>
+  {% else %}
+    <img src="{{ 'logo.png' | asset_url }}" alt="GadgetsN.Store" width="150" height="40" style="height:36px; width:auto;" />
+    <span style="font-weight:900; font-size:18px; margin-left:8px; color:#000; display:none;" class="md:inline">GadgetsN<span style="color:#84cc0f;">.</span>Store</span>
+  {% endif %}
+</a>
+<style>
+  .header__logo { font-family: Inter, system-ui, sans-serif; }
+  /* Hide old Nexus gadgets branding if present */
+  img[alt*="Nexus"], img[alt*="mr.gf999"] { display:none !important; }
+</style>

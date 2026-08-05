@@ -1,0 +1,7 @@
+<svg width="280" height="52" viewBox="0 0 280 52" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .brand { font-family: 'Inter', system-ui, sans-serif; font-weight: 900; letter-spacing: -0.02em; }
+  </style>
+  <text x="0" y="32" class="brand" font-size="28" fill="#0a0a0a">GadgetsN<tspan fill="#84cc0f">.</tspan>Store</text>
+  <text x="0" y="46" font-family="Inter, sans-serif" font-size="8" letter-spacing="0.3em" fill="#777">SMARTER TECH. BETTER LIFE.</text>
+</svg>

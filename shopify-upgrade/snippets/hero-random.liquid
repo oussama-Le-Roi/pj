@@ -1,0 +1,48 @@
+{% comment %}
+  Hero Banner - Random Product Linking
+  Shows first image linking to random product from collections.all
+  Each page load shows different product, clicking goes to same product detail
+  Fixes: homepage banner empty link
+{% endcomment %}
+
+{% assign all_products = collections.all.products %}
+{% if all_products.size > 0 %}
+  {% assign random_index = "now" | date: "%N" | modulo: all_products.size %}
+  {% assign hero_product = all_products[random_index] %}
+{% else %}
+  {% assign hero_product = collections.all.products.first %}
+{% endif %}
+
+<div class="hero-random-banner" style="position:relative; border-radius:28px; overflow:hidden; min-height:480px; background:#000;">
+  <a href="{{ hero_product.url }}" style="display:block; width:100%; height:100%; text-decoration:none;">
+    <img src="{{ hero_product.featured_image | image_url: width: 1200 }}" alt="{{ hero_product.title }}" loading="eager" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover; opacity:0.85;" />
+    <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(0,0,0,0.9), rgba(0,0,0,0.2));"></div>
+    <div style="position:relative; z-index:2; padding:48px; height:480px; display:flex; flex-direction:column; justify-content:flex-end; color:#fff;">
+      <div style="background:rgba(255,255,255,0.15); backdrop-filter:blur(10px); padding:6px 12px; border-radius:999px; font-size:11px; display:inline-block; width:fit-content; margin-bottom:16px;">
+        ✨ Featured • {{ hero_product.product_type | default: hero_product.vendor | default: 'Bestseller' }} • ★ {{ hero_product.metafields.reviews.rating.value | default: 4.8 }}
+      </div>
+      <h1 style="font-size:42px; line-height:0.95; font-weight:900; letter-spacing:-0.02em; max-width:500px; margin:0;">
+        {{ hero_product.title | truncate: 45 }}<br/>
+        <span style="color:#a3ff12;">On Sale Now</span>
+      </h1>
+      <p style="margin-top:12px; opacity:0.7; max-width:440px; font-size:14px;">{{ hero_product.description | strip_html | truncate: 120 }}</p>
+      <div style="margin-top:20px; display:flex; align-items:center; gap:16px;">
+        <span style="background:#fff; color:#000; padding:12px 28px; border-radius:999px; font-weight:700; font-size:14px;">Shop Now →</span>
+        <span style="font-size:22px; font-weight:900;">{{ hero_product.price | money }} {% if hero_product.compare_at_price > hero_product.price %}<span style="font-size:13px; text-decoration:line-through; opacity:0.5; font-weight:400;">{{ hero_product.compare_at_price | money }}</span>{% endif %}</span>
+      </div>
+    </div>
+  </a>
+</div>
+
+{% comment %} Optional: JavaScript fallback for true random on each reload without caching {% endcomment %}
+<script>
+  document.addEventListener('DOMContentLoaded', function(){
+    const products = {{ collections.all.products | json }};
+    if(products && products.length){
+      const rnd = products[Math.floor(Math.random()*products.length)];
+      // If you want to force update hero on client side each load (bypassing cache)
+      // const banner = document.querySelector('.hero-random-banner a');
+      // if(banner) banner.href = '/products/' + rnd.handle;
+    }
+  });
+</script>

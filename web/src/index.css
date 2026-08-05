@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+body { @apply bg-[#fafafa] text-zinc-900 antialiased; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
+.scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* custom shad */
+.btn-primary { @apply bg-black text-white hover:bg-zinc-800 transition px-6 py-3 rounded-full font-semibold; }
+.btn-accent { @apply bg-[#a3ff12] text-black hover:bg-[#90e60f] transition px-6 py-3 rounded-full font-semibold; }
+.card { @apply bg-white rounded-[20px] border border-zinc-100 shadow-sm; }
